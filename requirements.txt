@@ -1,0 +1,6 @@
+pandas==2.3.2
+pydantic==2.11.7
+tqdm==4.67.1
+transformers==4.56.0
+torch==2.8.0
+openai==1.102.0
