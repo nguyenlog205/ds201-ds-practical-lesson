@@ -3,10 +3,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import mlflow
-from src.ANN.CNN import CNN
-from pathlib import Path
 from sklearn.model_selection import train_test_split
-from utils import load_dataset
+from .utils import load_dataset
 
 def train(
        X_data, 
@@ -24,7 +22,7 @@ def train(
     print("Đang chuẩn bị và chia dữ liệu...")
     X_train, X_val, y_train, y_val = train_test_split(
        X_data, y_data, 
-       test_size=0.2,
+       test_size=0.1,
        random_state=42,
        stratify=y_data
     )
@@ -103,11 +101,13 @@ def train_pipeline():
     )
     
     from ANN.CNN import CNN
+'''
     train(X_data=X_train,
           y_data=y_train,
           model_class=CNN,
           LEARNING_RATE=0.001,
           BATCH_SIZE=64,
           EPOCHS=10,
-          MLFLOW_EXPERIMENT_NAME=CNN.__name__
+          #MLFLOW_EXPERIMENT_NAME=CNN.__name__
     )
+    '''
