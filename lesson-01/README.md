@@ -8,7 +8,12 @@
 ## ⛏️ Lecture note structure
 ```bash
 ds201-ds-practical-lesson/lesson-01
-├── data/
+├── data/           # Dataset for the lesson
+│  ├── t10k-images.idx3-ubyte  # Dataset for testing
+│  ├── t10k-labels.idx1-ubyte
+│  ├── train-images.idx3-ubyte # Dataset for training
+│  └── train-labels.idx1-ubyte
+│
 ├── notebook/
 │   └── report.ipynb # Report of the lesson
 │
