@@ -6,7 +6,7 @@
 
 ## ⛏️ Lecture note structure
 ```tex
-│
+ds201-ds-practical-lesson
 ├── lesson-01/
 ├── lesson-02/
 ├── lesson-03/
