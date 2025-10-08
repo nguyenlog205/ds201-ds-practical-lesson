@@ -1,6 +1,6 @@
 # LESSON 01
 
-> This repository serves as lecture notes for the **Lesson 01 - Deep Learning for Data Science**.
+> This repository serves as lecture notes for the **Lesson 01 - Deep Learning for Data Science**. Github Repository: https://github.com/nguyenlog205/ds201-ds-practical-lesson/tree/main/lesson-01
 
 ## 🔬 Prerequisite
 - Python `3.10.x` (recommend `3.10.11`)
