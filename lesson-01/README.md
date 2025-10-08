@@ -22,6 +22,7 @@ ds201-ds-practical-lesson/lesson-01
 │   ├── predict.py   # Pipeline for prediction
 │   ├── train.py     # Pipeline for training
 │   └── utils.py     # Commonly used modules/functions
+│
 ├── .gitignore
 ├── lecture.ipynb    # Lesson requirements
 └── README.md
