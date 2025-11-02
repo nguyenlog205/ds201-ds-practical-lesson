@@ -13,70 +13,19 @@ from src.data.load import load_data
 import torch.nn as nn
 import torch.optim as optim
 
-def _get_model_in_channels(model: nn.Module) -> int:
-    """
-    Try to infer the expected input channel count of the model by
-    finding the first nn.Conv2d module. Fallback to 3.
-    """
-    for m in model.modules():
-        if isinstance(m, nn.Conv2d):
-            return getattr(m, "in_channels", 3)
-    return 3
-
-
-def _preprocess_batch_channels(images: torch.Tensor, target_channels: int) -> torch.Tensor:
-    """
-    Convert batch of images to have target_channels.
-
-    images: tensor (B, C, H, W) in range expected by model (already tensor).
-    - If target_channels == 1 and images have 3 channels -> convert to grayscale using standard weights.
-    - If target_channels == 3 and images have 1 channel -> repeat channel 3 times.
-    - If channels mismatch otherwise, try simple slicing / repeating.
-
-    Returns tensor with shape (B, target_channels, H, W).
-    """
-    if images.dim() != 4:
-        return images
-    b, c, h, w = images.shape
-    if c == target_channels:
-        return images
-
-    # common conversions
-    if target_channels == 1 and c == 3:
-        # convert RGB to grayscale using luminosity method
-        r = images[:, 0:1, :, :]
-        g = images[:, 1:2, :, :]
-        bch = images[:, 2:3, :, :]
-        gray = 0.2989 * r + 0.5870 * g + 0.1140 * bch
-        return gray
-    if target_channels == 3 and c == 1:
-        return images.repeat(1, 3, 1, 1)
-
-    # fallback: if input has more channels than needed, slice
-    if c > target_channels:
-        return images[:, :target_channels, :, :]
-
-    # fallback: if input has fewer channels, repeat to match
-    repeat_times = int((target_channels + c - 1) // c)
-    images_rep = images.repeat(1, repeat_times, 1, 1)
-    return images_rep[:, :target_channels, :, :]
-
 
 def train_model(
-    data_root: str,
-    model: Union[torch.nn.Module, Callable[..., torch.nn.Module]],
+    train_loader: torch.utils.data.DataLoader,
+    val_loader: Optional[torch.utils.data.DataLoader] = None,
+    test_loader: Optional[torch.utils.data.DataLoader] = None,
+    model: Union[torch.nn.Module, Callable[..., torch.nn.Module]] = None,
     model_args: Optional[Dict[str, Any]] = None,
-    img_size: int = 224,
-    batch_size: int = 32,
-    val_split: float = 0.1,
     epochs: int = 10,
     lr: float = 1e-3,
     optimizer_cls: Callable = optim.Adam,
     optimizer_kwargs: Optional[Dict[str, Any]] = None,
     criterion: Optional[torch.nn.modules.loss._Loss] = None,
     device: Optional[str] = None,
-    num_workers: int = 0,
-    pin_memory: bool = False,
     save_dir: str = "./checkpoints",
     seed: int = 42,
     log_mlflow: bool = False,
@@ -102,29 +51,23 @@ def train_model(
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs(save_dir, exist_ok=True)
 
-    # instantiate model if callable
-    if callable(model):
+    # Handle model instantiation
+    if model is None:
+        raise ValueError("model cannot be None")
+    
+    # If model is a class (callable) and not an instance, instantiate it
+    if isinstance(model, type) and issubclass(model, nn.Module):
         model = model(**(model_args or {}))
+    elif callable(model) and not isinstance(model, nn.Module):
+        model = model(**(model_args or {}))
+    
     if not isinstance(model, nn.Module):
-        raise ValueError("model must be an nn.Module instance or a callable returning one")
+        raise ValueError("model must be an nn.Module instance or a class/callable returning one")
 
     model = model.to(device)
 
-    # infer model expected input channels
-    model_in_channels = _get_model_in_channels(model)
-
-    # data
-    train_loader, val_loader, test_loader, classes = load_data(
-        data_root=data_root,
-        img_size=img_size,
-        batch_size=batch_size,
-        val_split=val_split,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-    )
     if train_loader is None:
-        raise RuntimeError(f"Train folder not found under {data_root}/train")
+        raise ValueError("train_loader cannot be None")
 
     # optimizer & loss
     optimizer_kwargs = optimizer_kwargs or {}
@@ -145,7 +88,6 @@ def train_model(
             import mlflow
             mlflow.start_run()
             mlflow.log_param("lr", lr)
-            mlflow.log_param("batch_size", batch_size)
         except Exception:
             pass
 
@@ -155,13 +97,22 @@ def train_model(
         n_samples = 0
 
         train_iter = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs} - train", unit="batch")
-        for images, labels in train_iter:
+        for batch in train_iter:
+            # Handle different types of batch data
+            if isinstance(batch, (tuple, list)):
+                images, labels = batch
+            else:
+                raise ValueError("Expected batch to be tuple/list of (images, labels)")
+
+            # Ensure inputs are tensors
+            if not isinstance(images, torch.Tensor):
+                images = torch.tensor(images)
+            if not isinstance(labels, torch.Tensor):
+                labels = torch.tensor(labels)
+
             # optional preprocessing on CPU tensors (before moving to device)
             if preprocessing_fn is not None:
                 images = preprocessing_fn(images)
-
-            # ensure channel count matches model expectation
-            images = _preprocess_batch_channels(images, model_in_channels)
 
             images = images.to(device)
             labels = labels.to(device)
@@ -193,11 +144,22 @@ def train_model(
 
             val_iter = tqdm(val_loader, desc=f"Epoch {epoch}/{epochs} - val", unit="batch")
             with torch.no_grad():
-                for images, labels in val_iter:
+                for batch in val_iter:
+                    # Handle different types of batch data
+                    if isinstance(batch, (tuple, list)):
+                        images, labels = batch
+                    else:
+                        raise ValueError("Expected batch to be tuple/list of (images, labels)")
+
+                    # Ensure inputs are tensors
+                    if not isinstance(images, torch.Tensor):
+                        images = torch.tensor(images)
+                    if not isinstance(labels, torch.Tensor):
+                        labels = torch.tensor(labels)
+
+                    # optional preprocessing on CPU tensors (before moving to device)
                     if preprocessing_fn is not None:
                         images = preprocessing_fn(images)
-
-                    images = _preprocess_batch_channels(images, model_in_channels)
 
                     images = images.to(device)
                     labels = labels.to(device)
@@ -239,8 +201,7 @@ def train_model(
                 "epoch": epoch,
                 "model_state": model.state_dict(),
                 "optimizer_state": optimizer.state_dict(),
-                "accuracy": acc,
-                "classes": classes
+                "accuracy": acc
             }, best_ckpt_path)
 
         # optional mlflow logging per epoch
@@ -258,13 +219,25 @@ def train_model(
         model.eval()
         all_preds = []; all_targets = []; test_loss_sum = 0.0; test_samples = 0
         with torch.no_grad():
-            for images, labels in test_loader:
+            for batch in test_loader:
+                # Handle different types of batch data
+                if isinstance(batch, (tuple, list)):
+                    images, labels = batch
+                else:
+                    raise ValueError("Expected batch to be tuple/list of (images, labels)")
+
+                # Ensure inputs are tensors
+                if not isinstance(images, torch.Tensor):
+                    images = torch.tensor(images)
+                if not isinstance(labels, torch.Tensor):
+                    labels = torch.tensor(labels)
+
+                # optional preprocessing on CPU tensors (before moving to device)
                 if preprocessing_fn is not None:
                     images = preprocessing_fn(images)
 
-                images = _preprocess_batch_channels(images, model_in_channels)
-
-                images = images.to(device); labels = labels.to(device)
+                images = images.to(device)
+                labels = labels.to(device)
                 outputs = model(images)
                 loss = criterion(outputs, labels)
                 preds = outputs.argmax(dim=1)

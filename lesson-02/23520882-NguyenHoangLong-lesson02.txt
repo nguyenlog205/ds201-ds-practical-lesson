@@ -1,3 +1,4 @@
 DS201.Q11 - Deep Learning for Data Science
 Name: Nguyen Hoang Long
 Student ID: 23520882
+Assignment URL: https://github.com/nguyenlog205/ds201-ds-practical-lesson/tree/main/lesson-02

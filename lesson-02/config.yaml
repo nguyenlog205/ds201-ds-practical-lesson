@@ -1,0 +1,8 @@
+app:
+  name: "My Cool Project"
+  version: "1.0.0"
+  debug: true
+
+server:
+  host: "127.0.0.1"
+  port: 8000
