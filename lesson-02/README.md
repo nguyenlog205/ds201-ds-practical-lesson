@@ -123,10 +123,10 @@ The training pipeline automatically:
 ## Results
 
 Best model performances:
-- LeNet-5: [Your accuracy]
-- ResNet18: [Your accuracy]
-- GoogLeNet: [Your accuracy]
-- ResNet50 (Fine-tuned): [Your accuracy]
+- LeNet-5 (model 01, train from scratch with 15 epoches): 0.1653
+- GoogLeNet (model 02, train from scratch with 15 epoches): 0.5010
+- ResNet18 (model 03, train from scratch with 15 epoches): 0.4223
+- ResNet50 (Fine-tuned, with 15 epoches): 0.6892
 
 ## Requirements
 
