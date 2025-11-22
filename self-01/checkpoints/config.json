@@ -1,0 +1,22 @@
+{
+    "BASE_DIR": "../",
+    "DATA_DIR": "../data/",
+    "CHECKPOINT_DIR": "../checkpoints/",
+    "TRAIN_PATH": "../data/train.csv",
+    "TEST_PATH": "../data/test.csv",
+    "SUBMISSION_PATH": "../data/submission.csv",
+    "GLOVE_PATH": "../data/glove.twitter.27B.200d.txt",
+    "MODEL_PATH": "../checkpoints/best_model.pth",
+    "VOCAB_PATH": "../checkpoints/vocab.json",
+    "CONFIG_PATH": "../checkpoints/config.json",
+    "FREQ_THRESHOLD": 2,
+    "BATCH_SIZE": 32,
+    "TRAIN_DEV_SPLIT": 0.15,
+    "D_MODEL": 200,
+    "N_CLASSES": 2,
+    "DROPOUT": 0.5,
+    "N_LAYERS": 2,
+    "EPOCHS": 20,
+    "LR": 0.0001,
+    "PAD_IDX": 0
+}
