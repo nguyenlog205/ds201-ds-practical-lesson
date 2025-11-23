@@ -11,7 +11,7 @@
     "CONFIG_PATH": "../checkpoints/config.json",
     "FREQ_THRESHOLD": 2,
     "BATCH_SIZE": 32,
-    "TRAIN_DEV_SPLIT": 0.15,
+    "TRAIN_DEV_SPLIT": 0.05,
     "D_MODEL": 200,
     "N_CLASSES": 2,
     "DROPOUT": 0.5,

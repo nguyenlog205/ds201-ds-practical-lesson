@@ -11,8 +11,6 @@ class Config:
     TRAIN_PATH = os.path.join(DATA_DIR, 'train.csv')
     TEST_PATH = os.path.join(DATA_DIR, 'test.csv')
     SUBMISSION_PATH = os.path.join(DATA_DIR, 'submission.csv')
-    
-    # --- THÊM DÒNG NÀY ---
     GLOVE_PATH = os.path.join(DATA_DIR, 'glove.twitter.27B.200d.txt')
     
     MODEL_PATH = os.path.join(CHECKPOINT_DIR, 'best_model.pth')
@@ -23,10 +21,7 @@ class Config:
     FREQ_THRESHOLD = 2
     BATCH_SIZE = 32
     TRAIN_DEV_SPLIT = 0.15
-    
-    # --- SỬA DÒNG NÀY ---
     D_MODEL = 200
-    
     N_CLASSES = 2
     DROPOUT = 0.5
     N_LAYERS = 2
