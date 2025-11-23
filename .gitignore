@@ -10,3 +10,4 @@ mlruns/
 dataset/
 
 nothing.py
+glove.twitter.27B.200d.txt
