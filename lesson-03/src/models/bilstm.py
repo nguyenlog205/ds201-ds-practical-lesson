@@ -1,188 +1,76 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import math
+import torch.optim as optim
+import random
 
-class CRFLayer(nn.Module):
-    """Conditional Random Field (CRF) layer manually implemented."""
-    def __init__(self, num_tags, start_tag_idx, stop_tag_idx):
+class Encoder(nn.Module):
+    def __init__(self, input_dim, emb_dim, hidden_dim, n_layers, dropout):
         super().__init__()
-        self.num_tags = num_tags
-        self.start_tag_idx = start_tag_idx
-        self.stop_tag_idx = stop_tag_idx
+        self.input_dim = input_dim
+        self.embedding = nn.Embedding(input_dim, emb_dim)
+        self.rnn = nn.LSTM(emb_dim, hidden_dim, n_layers, 
+                           dropout=dropout, bidirectional=True, batch_first=True)
         
-        # Ma trận chuyển đổi (Transition Matrix)
-        self.transitions = nn.Parameter(torch.randn(num_tags, num_tags))
+        self.dropout = nn.Dropout(dropout)
+        self.fc_hidden = nn.Linear(hidden_dim * 2, hidden_dim)
+        self.fc_cell = nn.Linear(hidden_dim * 2, hidden_dim)
+
+    def forward(self, src):
+        embedded = self.dropout(self.embedding(src))
         
-        # Ngăn chặn chuyển đổi tới/từ các nhãn START/STOP không hợp lệ
-        self.transitions.data[start_tag_idx, :] = -10000.
-        self.transitions.data[:, stop_tag_idx] = -10000.
-
-    def _score_sentence(self, feats, tags, mask):
-        """Tính điểm của chuỗi nhãn ĐÚNG (The True Path Score)."""
-        # feats: (seq_len, batch_size, num_tags)
-        # tags: (seq_len, batch_size)
+        outputs, (hidden, cell) = self.rnn(embedded)
+        hidden_forward = hidden[0::2]
+        hidden_backward = hidden[1::2]
+        hidden = torch.tanh(self.fc_hidden(torch.cat((hidden_forward, hidden_backward), dim=2)))
         
-        seq_len, batch_size, _ = feats.shape
-        score = torch.zeros(batch_size, device=feats.device)
+        cell_forward = cell[0::2]
+        cell_backward = cell[1::2]
+        cell = torch.tanh(self.fc_cell(torch.cat((cell_forward, cell_backward), dim=2)))
         
-        start_tags = torch.full((1, batch_size), self.start_tag_idx, dtype=tags.dtype, device=feats.device)
-        tags_ext = torch.cat([start_tags, tags], dim=0)
+        return outputs, hidden, cell
 
-        for i in range(seq_len):
-            prev_tag_indices = tags_ext[i]
-            curr_tag_indices = tags_ext[i+1]
-            
-            emission_score = feats[i, torch.arange(batch_size), curr_tag_indices]
-            transition_score = self.transitions[prev_tag_indices, curr_tag_indices]
-            
-            score += (emission_score + transition_score) * mask[i]
-        
-        # Thêm Transition Score từ nhãn cuối cùng TỚI nhãn STOP
-        last_tags_idx = (mask.sum(dim=0) - 1)
-        last_tags = tags[last_tags_idx, torch.arange(batch_size)]
-        final_transition = self.transitions[last_tags, self.stop_tag_idx]
-        score += final_transition
-        
-        return score
-
-    def _forward_alg(self, feats, mask):
-        """Tính Log-Sum-Exp của tất cả các đường đi (Partition Function)."""
-        seq_len, batch_size, num_tags = feats.shape
-        
-        log_alpha = torch.full((batch_size, num_tags), -10000., device=feats.device)
-        log_alpha[:, self.start_tag_idx] = 0.
-
-        for i in range(seq_len):
-            log_alpha_next = torch.full((batch_size, num_tags), -10000., device=feats.device)
-            
-            for next_tag in range(num_tags):
-                emission_score = feats[i, :, next_tag].unsqueeze(1)
-                transition_scores = self.transitions[:, next_tag].unsqueeze(0) 
-                
-                broadcast_sum = log_alpha.unsqueeze(2) + transition_scores + emission_score
-                
-                log_alpha_next[:, next_tag] = torch.logsumexp(broadcast_sum, dim=1)
-            
-            # Cập nhật log_alpha chỉ với các bước không bị padding
-            log_alpha = torch.where(mask[i].unsqueeze(1).bool(), log_alpha_next, log_alpha)
-
-        log_prob_sum = log_alpha + self.transitions[self.stop_tag_idx].unsqueeze(0)
-        final_log_sum_exp = torch.logsumexp(log_prob_sum, dim=1)
-        
-        return final_log_sum_exp
-
-    def viterbi_decode(self, feats, mask):
-        """Tìm chuỗi nhãn tối ưu (Viterbi Decoding)."""
-        seq_len, batch_size, num_tags = feats.shape
-        
-        log_prob = torch.full((batch_size, num_tags), -10000., device=feats.device)
-        log_prob[:, self.start_tag_idx] = 0.
-
-        backpointers = torch.full((seq_len, batch_size, num_tags), -1, dtype=torch.long, device=feats.device)
-
-        for i in range(seq_len):
-            broadcast_score = log_prob.unsqueeze(2) + self.transitions.unsqueeze(0) 
-            
-            max_scores, best_tags = torch.max(broadcast_score, dim=1)
-            
-            new_log_prob = max_scores + feats[i]
-            
-            log_prob = torch.where(mask[i].unsqueeze(1).bool(), new_log_prob, log_prob)
-            backpointers[i] = best_tags
-
-        log_prob += self.transitions[:, self.stop_tag_idx]
-        best_last_tag = torch.argmax(log_prob, dim=1)
-        
-        # Truy vết ngược (Backtracking)
-        best_path = []
-        curr_tag = best_last_tag
-        
-        # Tạo danh sách các chỉ số theo batch size để truy xuất backpointers
-        batch_indices = torch.arange(batch_size, device=feats.device) 
-        
-        for i in range(seq_len - 1, -1, -1):
-            if mask[i, 0].item(): # Chỉ truy vết ngược nếu không phải padding
-                curr_tag = backpointers[i, batch_indices, curr_tag]
-                best_path.insert(0, curr_tag.tolist())
-
-        # best_path sẽ là một list các list (length = seq_len)
-        return torch.tensor(best_path, device=feats.device).transpose(0, 1).tolist() # (batch_size, seq_len)
-
-    def forward(self, feats, tags, mask):
-        """Tính Loss (Log-Likelihood)"""
-        score_true = self._score_sentence(feats, tags, mask)
-        log_partition_func = self._forward_alg(feats, mask)
-        
-        return (log_partition_func - score_true).mean()
-
-
-
-class BiLSTM(nn.Module):
-    """
-    Mô hình Bi-LSTM Encoder (5 lớp) + Custom CRF Layer (Decoder) cho NER.
-    """
-    def __init__(self, vocab_size, embedding_dim, hidden_dim, num_layers, num_tags, dropout_rate=0.5):
+class Decoder(nn.Module):
+    def __init__(self, output_dim, emb_dim, hidden_dim, n_layers, dropout):
         super().__init__()
-        self.num_tags = num_tags
+        self.output_dim = output_dim
+        self.embedding = nn.Embedding(output_dim, emb_dim)
+        self.rnn = nn.LSTM(emb_dim, hidden_dim, n_layers, 
+                           dropout=dropout, batch_first=True)
         
-        # Giả định: START_TAG=0, STOP_TAG=1 (phải khớp với cách bạn mã hóa nhãn)
-        self.start_tag_idx = 0
-        self.stop_tag_idx = 1
-        
-        # 1. Embedding Layer
-        self.word_embeds = nn.Embedding(vocab_size, embedding_dim)
-        self.dropout = nn.Dropout(dropout_rate)
+        self.fc_out = nn.Linear(hidden_dim, output_dim)
+        self.dropout = nn.Dropout(dropout)
 
-        # 2. Bi-LSTM Encoder (5 lớp)
-        # Hidden size 256 (tổng 512 do Bidirectional)
-        self.lstm = nn.LSTM(
-            input_size=embedding_dim,
-            hidden_size=hidden_dim, # 256
-            num_layers=num_layers, # 5 layers
-            bidirectional=True,    
-            dropout=dropout_rate,
-            batch_first=True
-        )
+    def forward(self, input, hidden, cell):
+        input = input.unsqueeze(1)
+        embedded = self.dropout(self.embedding(input))
         
-        # 3. Mapping Layer (Decoder - Ánh xạ ra Tag Space)
-        lstm_output_dim = hidden_dim * 2
-        self.hidden2tag = nn.Linear(lstm_output_dim, num_tags)
-        
-        # 4. Custom CRF Layer
-        self.crf = CRFLayer(num_tags, self.start_tag_idx, self.stop_tag_idx)
+        output, (hidden, cell) = self.rnn(embedded, (hidden, cell))
+        prediction = self.fc_out(output.squeeze(1))
+        return prediction, hidden, cell
 
-    def _get_lstm_features(self, sentence):
-        """Trả về Emission Scores (feats) từ Bi-LSTM."""
-        # sentence: (batch_size, seq_len)
-        embeds = self.dropout(self.word_embeds(sentence)) 
-        
-        # lstm_out: (batch_size, seq_len, 2*hidden_dim)
-        lstm_out, _ = self.lstm(embeds)
-        
-        # tag_scores: (batch_size, seq_len, num_tags)
-        tag_scores = self.hidden2tag(lstm_out) 
-        
-        # Chuyển về định dạng (seq_len, batch_size, num_tags) cho CRF
-        return tag_scores.transpose(0, 1)
+class Seq2SeqNER(nn.Module):
+    def __init__(self, encoder, decoder, device):
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.device = device
 
-    def forward(self, sentence, tags, mask):
-        """Tính Loss (Log-Likelihood Loss)"""
-        feats = self._get_lstm_features(sentence)
+    def forward(self, src, trg, teacher_forcing_ratio=0.5):
+        batch_size = src.shape[0]
+        trg_len = trg.shape[1]
+        trg_vocab_size = self.decoder.output_dim
         
-        # tags và mask cần được transpose cho CRF: (seq_len, batch_size)
-        tags_crf = tags.transpose(0, 1)
-        mask_crf = mask.transpose(0, 1)
-        
-        # Loss được tính trong lớp CRF
-        loss = self.crf(feats, tags_crf, mask_crf)
-        return loss
+        outputs = torch.zeros(batch_size, trg_len, trg_vocab_size).to(self.device)
 
-    def decode(self, sentence, mask):
-        """Thực hiện Viterbi Decoding (Dự đoán)"""
-        feats = self._get_lstm_features(sentence)
-        mask_crf = mask.transpose(0, 1)
+        encoder_outputs, hidden, cell = self.encoder(src)
+
+        input = trg[:, 0] 
         
-        # Trả về chuỗi nhãn tối ưu: list of list (batch_size, seq_len)
-        best_path = self.crf.viterbi_decode(feats, mask_crf)
-        return best_path
+        for t in range(1, trg_len):
+            output, hidden, cell = self.decoder(input, hidden, cell)
+            outputs[:, t, :] = output
+            
+            top1 = output.argmax(1) 
+            input = trg[:, t] if random.random() < teacher_forcing_ratio else top1
+            
+        return outputs
