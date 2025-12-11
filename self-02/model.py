@@ -8,11 +8,10 @@ from nltk.tokenize import word_tokenize
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.svm import LinearSVC
 from sklearn.linear_model import LogisticRegression
-from sklearn.naive_bayes import ComplementNB
+from sklearn.naive_bayes import BernoulliNB # Giữ Bernoulli vì nó là MVP của bản 0.742
+from sklearn.feature_selection import SelectKBest, chi2
 from sklearn.ensemble import VotingClassifier
 from sklearn.utils import shuffle
-# Import CalibratedClassifierCV để lấy xác suất từ SVM
-from sklearn.calibration import CalibratedClassifierCV
 
 try:
     nltk.download("punkt", quiet=True)
@@ -37,8 +36,8 @@ def preprocess_clean(text):
 
 def preprocess_raw_case_sensitive(text):
     try:
-        text = str(text)
-        text = re.sub(r'([^\w\s])', r' \1 ', text)
+        # Regex tách dấu câu (Giữ nguyên logic chiến thắng)
+        text = re.sub(r'([^\w\s])', r' \1 ', str(text))
         return re.sub(r'\s+', ' ', text).strip()
     except:
         return ""
@@ -50,18 +49,18 @@ def preprocess_raw_case_sensitive(text):
 class model:
     def __init__(self):
         self.classifier = None
-        # Lưu lại dữ liệu train để dùng cho bước "Hack" trong predict
-        self.X_train_backup = None
-        self.y_train_backup = None
     
-    def manual_oversampling(self, X, Y, target_count=None):
-        # Hàm này giờ linh hoạt hơn để dùng lại
+    def manual_oversampling(self, X, Y):
+        print("--- Final Destination: Target 11k ---", flush=True)
+        np.random.seed(42) 
         X = np.array(X)
         Y = np.array(Y)
-        classes, counts = np.unique(Y, return_counts=True)
         
-        if target_count is None:
-            target_count = min(np.max(counts), 10000)
+        classes, counts = np.unique(Y, return_counts=True)
+        max_count = np.max(counts)
+        
+        # TĂNG NHẸ LÊN 11.000: Cố gắng vắt kiệt tài nguyên server
+        target_count = min(max_count, 11000)
         
         X_resampled = []
         Y_resampled = []
@@ -75,93 +74,80 @@ class model:
             X_resampled.extend(X[idx_new])
             Y_resampled.extend(Y[idx_new])
             
-        return list(X_resampled), list(Y_resampled) # Trả về list để dễ nối
-
-    def _build_model(self):
-        # Cấu hình HOÀNG KIM 0.742 (Giữ nguyên vì nó tốt nhất)
-        
-        # 1. Word Expert (SVM) - Bọc Calibrated để lấy xác suất cho Pseudo-labeling
-        svm_base = LinearSVC(C=1.0, loss='hinge', class_weight='balanced', dual=True, intercept_scaling=1.2, max_iter=2000, random_state=42)
-        svm_calibrated = CalibratedClassifierCV(svm_base, cv=3) # CV nhỏ để nhanh
-        
-        pipe_word = Pipeline([
-            ('tfidf', TfidfVectorizer(preprocessor=preprocess_clean, tokenizer=lambda s: s.split(), binary=True, strip_accents='unicode', min_df=1, ngram_range=(1, 3), sublinear_tf=True, max_features=30000)),
-            ('clf', svm_calibrated) 
-        ])
-
-        # 2. Char Expert (LR)
-        pipe_char = Pipeline([
-            ('tfidf', TfidfVectorizer(preprocessor=preprocess_clean, analyzer='char_wb', strip_accents='unicode', ngram_range=(3, 5), min_df=2, sublinear_tf=True, max_features=30000)),
-            ('clf', LogisticRegression(C=3.0, solver='liblinear', class_weight='balanced', max_iter=200, random_state=42))
-        ])
-
-        # 3. Raw Expert (ComplementNB)
-        pipe_raw = Pipeline([
-            ('tfidf', TfidfVectorizer(preprocessor=preprocess_raw_case_sensitive, lowercase=False, tokenizer=lambda s: s.split(), binary=True, ngram_range=(1, 4), min_df=1, sublinear_tf=True, max_features=30000)),
-            ('clf', ComplementNB(alpha=0.2, norm=False))
-        ])
-
-        # SOFT VOTING (Bắt buộc dùng Soft để lọc độ tin cậy)
-        return VotingClassifier(
-            estimators=[('word', pipe_word), ('char', pipe_char), ('raw', pipe_raw)],
-            voting='soft', 
-            weights=[1.2, 0.8, 1.0],
-            n_jobs=1
-        )
+        return shuffle(X_resampled, Y_resampled, random_state=42)
 
     def fit(self, XTrain, YTrain):
-        # Lưu dữ liệu gốc lại
-        self.X_train_backup = np.array(XTrain)
-        self.y_train_backup = np.array(YTrain)
-        
-        # Oversampling & Train lần 1
-        print("--- Phase 1: Initial Training ---", flush=True)
         X_bal, Y_bal = self.manual_oversampling(XTrain, YTrain)
-        self.classifier = self._build_model()
+
+        # 2. PIPELINES: CẤU HÌNH 0.742 + TINH CHỈNH
+
+        # --- NHÁNH 1: WORD EXPERT (SVM - Giữ nguyên) ---
+        pipe_word = Pipeline([
+            ('tfidf_word', TfidfVectorizer(
+                preprocessor=preprocess_clean, tokenizer=lambda s: s.split(),
+                binary=True, min_df=1, ngram_range=(1, 3), sublinear_tf=True, 
+                max_features=None # Để SelectKBest lo
+            )),
+            ('selector', SelectKBest(chi2, k=25000)), 
+            ('svm_word', LinearSVC(
+                C=1.0, 
+                loss='hinge', 
+                class_weight='balanced', 
+                dual=True, 
+                intercept_scaling=1.5, 
+                max_iter=3000, 
+                random_state=42
+            ))
+        ])
+
+        # --- NHÁNH 2: CHAR EXPERT (Logistic Regression - Mở rộng N-gram) ---
+        pipe_char = Pipeline([
+            ('tfidf_char', TfidfVectorizer(
+                preprocessor=preprocess_clean, analyzer='char_wb',
+                ngram_range=(2, 5), # <--- THAY ĐỔI: (2,5) thay vì (3,5) để bắt từ tắt 2 chữ
+                min_df=2, 
+                sublinear_tf=True, 
+                max_features=30000
+            )),
+            ('lr_char', LogisticRegression(
+                C=3.0, 
+                solver='liblinear', 
+                class_weight='balanced', 
+                max_iter=300, 
+                random_state=42
+            ))
+        ])
+
+        # --- NHÁNH 3: RAW EXPERT (BernoulliNB - Tăng độ nhạy) ---
+        pipe_raw = Pipeline([
+            ('tfidf_raw', TfidfVectorizer(
+                preprocessor=preprocess_raw_case_sensitive,
+                lowercase=False, tokenizer=lambda s: s.split(),
+                binary=True, ngram_range=(1, 4), min_df=1, sublinear_tf=True, 
+                max_features=30000
+            )),
+            ('nb_raw', BernoulliNB(
+                alpha=0.001, # <--- THAY ĐỔI: Alpha siêu nhỏ. Cực nhạy với tín hiệu hiếm.
+                fit_prior=True
+            ))
+        ])
+
+        # 3. VOTING (HARD)
+        print("--- Training Final Ensemble ---", flush=True)
+        self.classifier = VotingClassifier(
+            estimators=[
+                ('word_expert', pipe_word),
+                ('char_expert', pipe_char),
+                ('raw_expert', pipe_raw)
+            ],
+            voting='hard',
+            n_jobs=1
+        )
+        
         self.classifier.fit(X_bal, Y_bal)
+        print("--- Done ---", flush=True)
 
     def predict(self, XTest):
         if self.classifier is None:
-            raise Exception("Model not trained.")
-            
-        # --- GIAI ĐOẠN HACK: PSEUDO-LABELING ---
-        try:
-            print("--- Phase 2: Pseudo-Labeling Injection ---", flush=True)
-            
-            # 1. Dự đoán xác suất trên tập Test
-            probas = self.classifier.predict_proba(XTest)
-            
-            # 2. Lọc ra các mẫu cực kỳ tự tin (Confidence > 95%)
-            confidence = np.max(probas, axis=1)
-            pseudo_indices = np.where(confidence > 0.95)[0]
-            
-            if len(pseudo_indices) > 0:
-                print(f"Found {len(pseudo_indices)} high-confidence samples from Test set.", flush=True)
-                
-                # Lấy dữ liệu và nhãn giả
-                X_pseudo = np.array(XTest)[pseudo_indices]
-                y_pseudo = self.classifier.classes_[np.argmax(probas[pseudo_indices], axis=1)]
-                
-                # 3. Gộp vào tập Train gốc (Backup)
-                X_augmented = np.concatenate([self.X_train_backup, X_pseudo])
-                y_augmented = np.concatenate([self.y_train_backup, y_pseudo])
-                
-                # 4. Oversampling lại trên tập dữ liệu mới (Đã to hơn)
-                # Tăng nhẹ target_count lên 11k vì dữ liệu giờ đã phong phú hơn
-                X_final, Y_final = self.manual_oversampling(X_augmented, y_augmented, target_count=11000)
-                
-                # 5. Train lại model (Retrain)
-                # Tạo model mới tinh để học lại từ đầu
-                final_model = self._build_model()
-                final_model.fit(X_final, Y_final)
-                
-                print("--- Phase 3: Final Prediction with Augmented Brain ---", flush=True)
-                return final_model.predict(XTest)
-            else:
-                print("No confident samples found. Returning Phase 1 predictions.", flush=True)
-                return self.classifier.predict(XTest)
-                
-        except Exception as e:
-            # Fallback an toàn: Nếu bước hack bị lỗi (RAM/Time), trả về kết quả cũ
-            print(f"⚠️ Pseudo-labeling failed: {e}. Using base model.", flush=True)
-            return self.classifier.predict(XTest)
+            raise Exception("Model has not been trained yet.")
+        return self.classifier.predict(XTest)
