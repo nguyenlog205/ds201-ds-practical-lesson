@@ -40,6 +40,14 @@ class Vocabulary:
     @property
     def pad_index(self):
         return self.stoi["<PAD>"]
+    
+    @property
+    def unk_index(self):
+        return self.stoi["<UNK>"]
+
+    @property
+    def vocab_size(self):
+        return len(self.itos)
 
 # =========================================================================================
 # TextDataset
@@ -58,6 +66,7 @@ class TextDataset(Dataset):
         self.vocab = vocab
         self.text_col = text_column
         self.label_col = label_column
+        self.max_len = max_len
         
         self.data['label_idx'] = label_encoder.transform(self.data[self.label_col])
 
@@ -69,7 +78,7 @@ class TextDataset(Dataset):
         indices = self.vocab.numericalize(text_raw)
         if len(indices) > self.max_len:
             indices = indices[:self.max_len]
-            
+
         label = self.data.iloc[idx]['label_idx']
         
         return indices, label
