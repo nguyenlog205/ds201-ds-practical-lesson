@@ -35,8 +35,7 @@ class NERTransformer(nn.Module):
         self.dropout = nn.Dropout(0.1)
 
     def forward(self, src, src_key_padding_mask=None):
-
-        src = self.embedding(src) * math.sqrt(128)
+        src = self.embedding(src) * math.sqrt(self.embedding.embedding_dim)
         src = self.pos_encoder(src)
 
         output = self.transformer_encoder(src, src_key_padding_mask=src_key_padding_mask)

@@ -1,50 +1,75 @@
 import torch
-import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-from torch.nn.utils.rnn import pad_sequence
 from collections import Counter
+from torch.utils.data import Dataset
+from torch.nn.utils.rnn import pad_sequence
 
 class Vocabulary:
-    def __init__(self, freq_threshold=1):
-        self.itos = {0: "<PAD>", 1: "<UNK>"}
+    def __init__(self, is_tag=False):
+        self.itos = {
+            0: "<pad>", 
+            1: "<unk>"
+        } if not is_tag else {
+            0: "<pad>"
+        }
         self.stoi = {v: k for k, v in self.itos.items()}
-        self.freq_threshold = freq_threshold
+        self.is_tag = is_tag
 
-    def build(self, sentences):
-        freqs = Counter()
-        for sent in sentences:
-            for word in sent:
-                freqs[word] += 1
-        for word, count in freqs.items():
-            if count >= self.freq_threshold:
-                self.stoi[word] = len(self.itos)
-                self.itos[len(self.itos)] = word
+    def build_vocabulary(self, sentence_list):
+        frequencies = Counter()
+        idx = len(self.itos)
 
-    def numericalize(self, words):
-        return [self.stoi.get(w, self.stoi["<UNK>"]) for w in words]
+        for sentence in sentence_list:
+            for word in sentence:
+                frequencies[word] += 1
 
-class NERDataset(Dataset):
-    def __init__(self, sentences, tags, vocab, tag_map):
-        self.sentences = sentences
-        self.tags = tags
-        self.vocab = vocab
-        self.tag_map = tag_map 
+        for word, freq in frequencies.items():
+            # Có thể đặt ngưỡng freq > 1 để lọc từ hiếm
+            if word not in self.stoi:
+                self.stoi[word] = idx
+                self.itos[idx] = word
+                idx += 1
+
+    def encode(self, text_list):
+        return [self.stoi.get(word, self.stoi.get("<unk>", 0)) for word in text_list]
 
     def __len__(self):
-        return len(self.sentences)
+        return len(self.itos)
+    
+    @property
+    def pad_index(self):
+        return self.stoi["<pad>"]
+    
+    @property
+    def unk_index(self):
+        return self.stoi["<unk>"]
+    
+    @property
+    def vocab_size(self):
+        return len(self.itos)
+    
 
-    def __getitem__(self, idx):
-        words = self.sentences[idx]
-        tags = self.tags[idx]
+# =================================================================
+#                             DATASET
+# =================================================================
+class PhoNERDataset(Dataset):
+    def __init__(self, words_list, tags_list, word_vocab, tag_vocab):
+        self.words_list = words_list
+        self.tags_list = tags_list
+        self.word_vocab = word_vocab
+        self.tag_vocab = tag_vocab
 
-        word_indices = self.vocab.numericalize(words)
+    def __len__(self):
+        return len(self.words_list)
 
-        tag_indices = [self.tag_map[t] for t in tags]
+    def __getitem__(self, index):
+        word_ids = self.word_vocab.encode(self.words_list[index])
+        tag_ids = self.tag_vocab.encode(self.tags_list[index])
 
-        return torch.tensor(word_indices, dtype=torch.long), torch.tensor(tag_indices, dtype=torch.long)
-
-def ner_collate_fn(batch, pad_idx_text=0, pad_idx_label=-100):
-    text_list, label_list = zip(*batch)
-    padded_text = pad_sequence(text_list, batch_first=True, padding_value=pad_idx_text)
-    padded_labels = pad_sequence(label_list, batch_first=True, padding_value=pad_idx_label)
-    return padded_text, padded_labels
+        return torch.tensor(word_ids), torch.tensor(tag_ids)
+    
+def ner_collate_fn(batch):
+    (inputs, targets) = zip(*batch)
+    inputs_padded = pad_sequence(inputs, batch_first=True, padding_value=0)
+    targets_padded = pad_sequence(targets, batch_first=True, padding_value=0)
+    src_key_padding_mask = (inputs_padded == 0)
+    return inputs_padded, targets_padded, src_key_padding_mask
